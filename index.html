@@ -7434,6 +7434,475 @@ document.head.appendChild(s6);
 console.log("[CAMPEACH] Fase 6 FINAL — 26/26 ideas ✅ Sistema 100% completo");
 
 
+
+// ============================================================
+// CAMPEACH RD — CAPA SUPABASE
+// Reemplaza datos estáticos por datos reales en tiempo real
+// ============================================================
+
+const SUPABASE_CONFIG = {
+  url:     "https://rvufbrvdfbaindmwtfsu.supabase.co",
+  anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2dWZicnZkZmJhaW5kbXd0ZnN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyODM0ODMsImV4cCI6MjA5MTg1OTQ4M30.UCxO_m75fDGSpa3h74RSzFivy2_gGhPxpxewp7yAFTY",
+  configured: true,
+};
+
+// ── CLIENTE SUPABASE LIVIANO ──────────────────────────────
+const SB = {
+  _headers() {
+    return {
+      "apikey":        SUPABASE_CONFIG.anonKey,
+      "Authorization": "Bearer " + SUPABASE_CONFIG.anonKey,
+      "Content-Type":  "application/json",
+      "Prefer":        "return=representation",
+    };
+  },
+
+  async query(table, params = {}) {
+    if (!SUPABASE_CONFIG.configured) return null;
+    let url = `${SUPABASE_CONFIG.url}/rest/v1/${table}?`;
+    if (params.select)  url += `select=${encodeURIComponent(params.select)}&`;
+    if (params.order)   url += `order=${params.order}&`;
+    if (params.limit)   url += `limit=${params.limit}&`;
+    if (params.filter)  url += `${params.filter}&`;
+    try {
+      const res = await fetch(url, { headers: this._headers() });
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json();
+    } catch(e) {
+      console.warn(`[SB] Query error (${table}):`, e.message);
+      return null;
+    }
+  },
+
+  async insert(table, data) {
+    if (!SUPABASE_CONFIG.configured) return null;
+    try {
+      const res = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/${table}`, {
+        method: "POST",
+        headers: this._headers(),
+        body: JSON.stringify(Array.isArray(data) ? data : [data]),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json();
+    } catch(e) {
+      console.warn(`[SB] Insert error (${table}):`, e.message);
+      return null;
+    }
+  },
+
+  async update(table, id, data) {
+    if (!SUPABASE_CONFIG.configured) return null;
+    try {
+      const res = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/${table}?id=eq.${id}`, {
+        method: "PATCH",
+        headers: this._headers(),
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json();
+    } catch(e) {
+      console.warn(`[SB] Update error (${table}):`, e.message);
+      return null;
+    }
+  },
+
+  async delete(table, id) {
+    if (!SUPABASE_CONFIG.configured) return null;
+    try {
+      const res = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/${table}?id=eq.${id}`, {
+        method: "DELETE",
+        headers: this._headers(),
+      });
+      return res.ok;
+    } catch(e) {
+      console.warn(`[SB] Delete error (${table}):`, e.message);
+      return false;
+    }
+  },
+
+  // Suscribir a cambios en tiempo real
+  subscribe(table, callback) {
+    if (!SUPABASE_CONFIG.configured) return null;
+    const wsUrl = SUPABASE_CONFIG.url.replace("https://","wss://") + `/realtime/v1/websocket?apikey=${SUPABASE_CONFIG.anonKey}&vsn=1.0.0`;
+    const ws = new WebSocket(wsUrl);
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ topic: `realtime:public:${table}`, event: "phx_join", payload: {}, ref: "1" }));
+    };
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.event === "INSERT" || msg.event === "UPDATE" || msg.event === "DELETE") {
+        callback(msg.event, msg.payload?.record);
+      }
+    };
+    return ws;
+  },
+};
+
+// ── SINCRONIZACIÓN CON SUPABASE ───────────────────────────
+const SupabaseSync = {
+  _loaded: false,
+  _ws: null,
+
+  async init() {
+    if (!SUPABASE_CONFIG.configured) {
+      console.log("[SB] No configurado — usando datos locales");
+      return false;
+    }
+
+    console.log("[SB] Conectando a Supabase...");
+    App.toast("Conectando a base de datos...", "info", 2000);
+
+    try {
+      await Promise.all([
+        this.loadClientes(),
+        this.loadReservas(),
+        this.loadCampamentos(),
+        this.loadEquipos(),
+        this.loadSuplidores(),
+        this.loadGastos(),
+        this.loadPipeline(),
+      ]);
+
+      this._loaded = true;
+      this.subscribeRealtime();
+      App.toast("✓ Conectado a Supabase — datos en tiempo real", "success", 3000);
+      console.log("[SB] Sincronización completa");
+
+      // Re-render current page with fresh data
+      const page = App.currentPage;
+      if (Pages[page]) Pages[page].render(document.getElementById("main-content"));
+
+      return true;
+    } catch(e) {
+      console.warn("[SB] Error de sincronización:", e);
+      App.toast("Sin conexión — usando datos locales", "warning", 3000);
+      return false;
+    }
+  },
+
+  async loadClientes() {
+    const data = await SB.query("clientes", {
+      select: "*",
+      order:  "total_facturado.desc",
+      limit:  1000,
+    });
+    if (!data) return;
+    DB.clientes = data.map(c => ({
+      id:             c.codigo || c.id,
+      nombre:         c.nombre,
+      tel:            c.tel || "",
+      email:          c.email || "",
+      etiqueta:       c.etiqueta || "Lead",
+      estado:         c.estado || "Lead",
+      totalFacturado: parseFloat(c.total_facturado) || 0,
+      pedidos:        c.pedidos || 0,
+      ultimaCompra:   c.ultima_compra,
+      _supabase_id:   c.id,
+    }));
+    console.log(`[SB] Clientes: ${DB.clientes.length}`);
+  },
+
+  async loadReservas() {
+    const data = await SB.query("reservas", {
+      select: "*",
+      order:  "fecha_evento.desc",
+      limit:  500,
+    });
+    if (!data) return;
+    DB.reservas = data.map(r => ({
+      id:            r.numero,
+      num:           r.numero,
+      clienteId:     r.cliente_id,
+      cliente:       r.cliente_nombre,
+      campamento:    r.campamento,
+      servicio:      r.servicio,
+      fechaEvento:   r.fecha_evento,
+      adultos:       r.adultos || 1,
+      noches:        r.noches || 1,
+      total:         parseFloat(r.total) || 0,
+      suplidorPago:  parseFloat(r.suplidor_pago) || 0,
+      ganancia:      parseFloat(r.ganancia) || 0,
+      estado:        r.estado || "Pendiente",
+      metodo:        r.metodo_pago || "—",
+      _supabase_id:  r.id,
+    }));
+    console.log(`[SB] Reservas: ${DB.reservas.length}`);
+  },
+
+  async loadCampamentos() {
+    const data = await SB.query("campamentos", {
+      select: "*",
+      order:  "pedidos_ytd.desc",
+    });
+    if (!data) return;
+    DB.campamentos = data.map(c => ({
+      id:          c.codigo,
+      nombre:      c.nombre,
+      region:      c.region,
+      activo:      c.activo,
+      precio_base: parseFloat(c.precio_base) || null,
+      relieve:     c.relieve,
+      bal:         c.bal,
+      v4x4:        c.v4x4_required,
+      cap:         c.capacidad_max,
+      pedidos:     c.pedidos_ytd || 0,
+      suplidorId:  c.codigo,
+      _supabase_id: c.id,
+    }));
+    console.log(`[SB] Campamentos: ${DB.campamentos.length}`);
+  },
+
+  async loadEquipos() {
+    const data = await SB.query("equipos", { select: "*" });
+    if (!data) return;
+    DB.equipos = data.map(e => ({
+      id:           e.codigo,
+      nombre:       e.nombre,
+      cat:          e.categoria,
+      unidades:     e.unidades,
+      disponibles:  e.disponibles,
+      precio:       parseFloat(e.precio_noche) || 0,
+      deposito:     parseFloat(e.deposito) || 0,
+      _supabase_id: e.id,
+    }));
+    console.log(`[SB] Equipos: ${DB.equipos.length}`);
+  },
+
+  async loadSuplidores() {
+    const data = await SB.query("suplidores", { select: "*", order: "pagado_ytd.desc" });
+    if (!data) return;
+    DB.suplidores = data.map(s => ({
+      id:           s.codigo,
+      nombre:       s.nombre,
+      campamento:   s.campamento,
+      tel:          s.tel,
+      pagadoYTD:    parseFloat(s.pagado_ytd) || 0,
+      pendiente:    parseFloat(s.pendiente) || 0,
+      _supabase_id: s.id,
+    }));
+    console.log(`[SB] Suplidores: ${DB.suplidores.length}`);
+  },
+
+  async loadGastos() {
+    const data = await SB.query("gastos", { select: "*", order: "fecha.desc", limit: 200 });
+    if (!data) return;
+    DB.gastos = data.map(g => ({
+      id:          g.id,
+      fecha:       g.fecha,
+      cat:         g.categoria,
+      desc:        g.descripcion,
+      proveedor:   g.proveedor,
+      monto:       parseFloat(g.monto) || 0,
+      mes:         g.mes,
+      _supabase_id: g.id,
+    }));
+    console.log(`[SB] Gastos: ${DB.gastos.length}`);
+  },
+
+  async loadPipeline() {
+    const data = await SB.query("pipeline", { select: "*", order: "fecha.desc" });
+    if (!data) return;
+    DB.pipeline = data.map(l => ({
+      id:           l.codigo || l.id,
+      clienteId:    l.cliente_id,
+      cliente:      l.cliente,
+      campamento:   l.campamento,
+      monto:        parseFloat(l.monto) || 0,
+      fecha:        l.fecha,
+      estado:       l.estado,
+      adultos:      l.adultos || 1,
+      noches:       l.noches || 1,
+      urgencia:     l.urgencia || "media",
+      _supabase_id: l.id,
+    }));
+    console.log(`[SB] Pipeline: ${DB.pipeline.length}`);
+  },
+
+  // ── ESCRITURA REAL-TIME ──────────────────────────────────
+  async saveCliente(cliente) {
+    if (!SUPABASE_CONFIG.configured) { Store.save(); return; }
+    const payload = {
+      nombre:          cliente.nombre,
+      tel:             cliente.tel,
+      email:           cliente.email,
+      etiqueta:        cliente.etiqueta,
+      estado:          cliente.estado,
+      total_facturado: cliente.totalFacturado,
+      pedidos:         cliente.pedidos,
+      ultima_compra:   cliente.ultimaCompra,
+    };
+    if (cliente._supabase_id) {
+      await SB.update("clientes", cliente._supabase_id, payload);
+    } else {
+      payload.codigo = cliente.id;
+      const res = await SB.insert("clientes", payload);
+      if (res?.[0]) cliente._supabase_id = res[0].id;
+    }
+    Store.save();
+  },
+
+  async saveReserva(reserva) {
+    if (!SUPABASE_CONFIG.configured) { Store.save(); return; }
+    const payload = {
+      numero:          reserva.num,
+      cliente_nombre:  reserva.cliente,
+      campamento:      reserva.campamento,
+      servicio:        reserva.servicio,
+      fecha_evento:    reserva.fechaEvento,
+      adultos:         reserva.adultos,
+      noches:          reserva.noches,
+      total:           reserva.total,
+      suplidor_pago:   reserva.suplidorPago,
+      estado:          reserva.estado,
+      metodo_pago:     reserva.metodo,
+    };
+    if (reserva._supabase_id) {
+      await SB.update("reservas", reserva._supabase_id, payload);
+    } else {
+      const res = await SB.insert("reservas", payload);
+      if (res?.[0]) reserva._supabase_id = res[0].id;
+    }
+    Store.save();
+  },
+
+  async saveGasto(gasto) {
+    if (!SUPABASE_CONFIG.configured) { Store.save(); return; }
+    const payload = {
+      fecha:       gasto.fecha,
+      categoria:   gasto.cat,
+      descripcion: gasto.desc,
+      proveedor:   gasto.proveedor,
+      monto:       gasto.monto,
+      mes:         gasto.mes,
+    };
+    const res = await SB.insert("gastos", payload);
+    if (res?.[0]) gasto._supabase_id = res[0].id;
+    Store.save();
+  },
+
+  subscribeRealtime() {
+    // Suscribirse a cambios en reservas en tiempo real
+    this._ws = SB.subscribe("reservas", (event, record) => {
+      if (!record) return;
+      if (event === "INSERT") {
+        App.toast(`Nueva reserva recibida: ${record.cliente_nombre}`, "success");
+        this.loadReservas().then(()=>{
+          if (App.currentPage === "reservas" || App.currentPage === "dashboard") {
+            Pages[App.currentPage]?.render(document.getElementById("main-content"));
+          }
+        });
+      }
+    });
+  },
+};
+
+// ── PANTALLA DE CONFIGURACIÓN SUPABASE ───────────────────
+Pages.config._supabaseSection = function() {
+  const configured = SUPABASE_CONFIG.configured;
+  return `
+    <div class="card" style="margin-top:16px;border:2px solid ${configured?"var(--green-400)":"var(--amber-400)"}">
+      <div class="card-header">
+        <div class="card-title">
+          ${iconSVG("activity")}
+          Conexión Supabase
+          <span class="badge ${configured?"badge-green":"badge-amber"}" style="margin-left:8px">
+            ${configured?"✓ Conectado":"Sin configurar"}
+          </span>
+        </div>
+      </div>
+      <div class="card-body">
+        ${!configured ? `
+          <div style="background:var(--amber-50);border-radius:8px;padding:14px;margin-bottom:16px;border:1px solid rgba(255,152,32,.2)">
+            <div style="font-size:13px;color:var(--amber-600);font-weight:600;margin-bottom:4px">
+              📋 Cómo configurar Supabase
+            </div>
+            <ol style="font-size:12px;color:var(--amber-700);line-height:2;padding-left:16px">
+              <li>Ve a <strong>supabase.com</strong> y crea una cuenta gratuita</li>
+              <li>Crea un nuevo proyecto llamado "campeach-rd"</li>
+              <li>Ve a <strong>SQL Editor</strong> y ejecuta el archivo <code>campeach_supabase_schema.sql</code></li>
+              <li>Luego ejecuta <code>campeach_supabase_seed.sql</code> para cargar los datos</li>
+              <li>Ve a <strong>Settings → API</strong> y copia tu URL y anon key</li>
+              <li>Pégalos aquí abajo y guarda</li>
+            </ol>
+          </div>` : ""}
+
+        <div class="form-grid form-grid-2">
+          <div class="form-group" style="grid-column:1/-1">
+            <label class="form-label">Supabase URL</label>
+            <input class="form-input" id="sb-url" placeholder="https://xxxxxxxxxxxx.supabase.co"
+              value="${SUPABASE_CONFIG.url}" style="font-family:monospace;font-size:12px">
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label class="form-label">Anon Key (pública)</label>
+            <input class="form-input" id="sb-key" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+              value="${SUPABASE_CONFIG.anonKey}" type="password" style="font-family:monospace;font-size:11px">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-primary" onclick="Pages.config._saveSupabase()">
+            ${iconSVG("check")} Guardar y conectar
+          </button>
+          ${configured ? `
+            <button class="btn btn-secondary" onclick="SupabaseSync.init()">
+              ${iconSVG("refresh-cw")} Sincronizar ahora
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="SUPABASE_CONFIG.url='';SUPABASE_CONFIG.anonKey='';SUPABASE_CONFIG.configured=false;localStorage.removeItem('sb_config');Pages.config.render(document.getElementById('main-content'))">
+              Desconectar
+            </button>` : ""}
+        </div>
+
+        ${configured ? `
+          <div style="margin-top:12px;padding:10px 12px;background:var(--green-50);border-radius:6px;font-size:12px;color:var(--green-600)">
+            ✅ Conectado a Supabase — los datos se guardan automáticamente en la nube y se sincronizan en tiempo real entre dispositivos.
+          </div>` : ""}
+      </div>
+    </div>`;
+};
+
+Pages.config._saveSupabase = async function() {
+  const url = document.getElementById("sb-url")?.value?.trim();
+  const key = document.getElementById("sb-key")?.value?.trim();
+  if (!url || !key) return App.toast("Ingresa URL y Key de Supabase","warning");
+
+  SUPABASE_CONFIG.url = url;
+  SUPABASE_CONFIG.anonKey = key;
+  SUPABASE_CONFIG.configured = true;
+
+  // Persist config
+  localStorage.setItem("sb_config", JSON.stringify({ url, key }));
+
+  App.toast("Configuración guardada — conectando...", "info", 2000);
+  const ok = await SupabaseSync.init();
+  if (ok) {
+    Pages.config.render(document.getElementById("main-content"));
+  } else {
+    App.toast("Error de conexión — verifica URL y Key", "error");
+    SUPABASE_CONFIG.configured = false;
+  }
+};
+
+// Patch config render para incluir sección Supabase
+const _origConfigRender = Pages.config.render.bind(Pages.config);
+Pages.config.render = function(container) {
+  _origConfigRender(container);
+  // Append Supabase section
+  const content = container.querySelector(".grid-2");
+  if (content) {
+    const sbDiv = document.createElement("div");
+    sbDiv.style.gridColumn = "1/-1";
+    sbDiv.innerHTML = Pages.config._supabaseSection();
+    content.appendChild(sbDiv);
+  }
+};
+
+// ── AUTO-INIT AL CARGAR ───────────────────────────────────
+// Supabase configurado — sincronizar al cargar
+setTimeout(() => SupabaseSync.init(), 1500);
+
+console.log("[CAMPEACH] Capa Supabase lista — configura en Ajustes");
+
+
 // ── BOOT ────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => App.init());
   </script>
