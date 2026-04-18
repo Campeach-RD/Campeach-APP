@@ -432,7 +432,8 @@ async function loadCamps(){
     const d=await sbQ("campamentos",{select:"nombre,region,activo,precio_base,relieve,bal,v4x4_required,capacidad_max,pedidos_ytd",filter:"activo=eq.true",order:"pedidos_ytd.desc"});
     camps=d.filter(c=>c.precio_base);
   }catch(e){camps=DEMO;}
-  renderCamps(camps);
+  if(typeof renderCampsConFotos==='function') renderCampsConFotos(camps);
+  else renderCamps(camps);
   populateSel(camps);
 }
 
@@ -468,9 +469,10 @@ function populateSel(list){
 function filterC(t,btn){
   document.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));
   btn.classList.add('active');
-  if(t==='todos'){renderCamps(camps);return;}
+  const render = typeof renderCampsConFotos==='function' ? renderCampsConFotos : renderCamps;
+  if(t==='todos'){render(camps);return;}
   const f={playa:c=>c.relieve==='Playa'||c.bal?.includes('Playa'),montana:c=>c.relieve==='Montaña',rio:c=>c.bal?.includes('Río')||c.bal?.includes('Cascada'),bosque:c=>c.relieve==='Bosque'||c.relieve==='Selva',norte:c=>c.region==='Norte',sur:c=>c.region==='Sur',este:c=>c.region==='Este'};
-  renderCamps(camps.filter(f[t]||(_=>true)));
+  render(camps.filter(f[t]||(_=>true)));
 }
 
 function openMo(i){
@@ -769,38 +771,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeMo();
 });
 
-// Patch loadCamps para usar renderCampsConFotos
-const _origLoadCamps = loadCamps;
-loadCamps = async function() {
-  try {
-    const d = await sbQ("campamentos", {
-      select: "nombre,region,activo,precio_base,relieve,bal,v4x4_required,capacidad_max,pedidos_ytd",
-      filter: "activo=eq.true",
-      order: "pedidos_ytd.desc"
-    });
-    camps = d.filter(c => c.precio_base);
-  } catch(e) { camps = DEMO; }
-  renderCampsConFotos(camps);
-  populateSel(camps);
-};
-
-// Patch filterC para usar renderCampsConFotos
-const _origFilterC = filterC;
-filterC = function(t, btn) {
-  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
-  btn.classList.add('active');
-  if (t === 'todos') { renderCampsConFotos(camps); return; }
-  const f = {
-    playa:   c => c.relieve === 'Playa' || c.bal?.includes('Playa'),
-    montana: c => c.relieve === 'Montaña',
-    rio:     c => c.bal?.includes('Río') || c.bal?.includes('Cascada'),
-    bosque:  c => c.relieve === 'Bosque' || c.relieve === 'Selva',
-    norte:   c => c.region === 'Norte',
-    sur:     c => c.region === 'Sur',
-    este:    c => c.region === 'Este'
-  };
-  renderCampsConFotos(camps.filter(f[t] || (_ => true)));
-};
+// loadCamps y filterC ya usan renderCampsConFotos directamente
 
 </script>
 </body>
